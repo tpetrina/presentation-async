@@ -1,0 +1,799 @@
+import { Notes, Image } from "mdx-deck";
+import { future, hack, dark, swiss } from "mdx-deck/themes";
+import { CodeSurfer } from "mdx-deck-code-surfer";
+import shadesOfPurple from "prism-react-renderer/themes/shadesOfPurple";
+import nightOwl from "prism-react-renderer/themes/nightOwl";
+import duotoneLight from "prism-react-renderer/themes/duotoneLight";
+
+export { components } from "mdx-deck-code-surfer";
+
+export const theme = {
+  //...dark,
+  ...swiss,
+  codeSurfer: {
+    ...shadesOfPurple,
+    //...duotoneLight,
+    showNumbers: false
+  }
+};
+
+# Async/Await
+
+---
+
+## The short story
+
+---
+
+```clike
+// fire and forget
+interface IOperation
+{
+  Task Fire();
+}
+
+// some consumer code
+IOperation operation;
+
+void MyCoolCode(IOperation operation)
+{
+  operation.Fire();
+}
+----
+* > Consuming Task based methods
+```
+
+---
+
+```csharp
+warning CS4014: Because this call is not awaited,
+execution of the current method continues before the
+call is completed. Consider applying the 'await'
+operator to the result of the call.
+----
+* > Treat warnings as errors
+```
+
+---
+
+```clike
+// fire and forget
+interface IOperation
+{
+  Task Fire();
+}
+
+// some consumer code
+IOperation operation;
+
+async void MyCoolCode(IOperation operation)
+{
+  await operation.Fire();
+}
+----
+* > Fixing our code
+12 > Adding await
+10 > Making the function async
+```
+
+---
+
+## Remember
+
+- Add both `async` and `await`
+- `void` can stay `void` -> we call this fire and forget
+- `void` can become `Task` -> our caller can `await` us
+- `ReturnType` becomes `Task<ReturnType>`
+
+---
+
+```clike
+async Task DoStuff(CancellationToken token)
+{
+  await ...
+  token.ThrowIfCancellationRequested();
+
+  for ()
+  {
+    await ...
+    token.ThrowIfCancellationRequested();
+  }
+}
+----
+* > Always check cancellation!
+```
+
+---
+
+```clike
+try
+{
+  await...
+}
+catch (OperationCancelledException)
+{
+  // cancelled
+}
+catch
+{
+  // errored!
+}
+* >
+```
+
+---
+
+## Keep in mind
+
+- `async` is infectious - convert all callers and their callers until the root
+- Always `try-catch` in the `void` root
+
+---
+
+# The end?
+
+---
+
+# The long version
+
+Also known as details
+
+---
+
+## Agenda
+
+- How did we get here?
+- Patterns and pitfalls
+- Exception handling
+- Combinators
+- Link to Rx and `IAsyncEnumerable`
+- UX problems
+- Conclusion
+
+---
+
+# C# is introduced to the world
+
+<small>2002</small>
+
+---
+
+```clike
+var file = File.Create("out.txt");
+var bytes = Encoding.UTF8.GetBytes("hello world");
+
+file.BeginWrite(bytes, 0, bytes.Length, ar =>
+{
+    file.EndWrite(ar);
+}, null);
+----
+* > Simple async patterns
+4 > Starting asynchronous operation
+6 > Ending it via handle
+```
+
+---
+
+# When do you close a file?
+
+---
+
+```clike
+var file = File.Create("out.txt");
+var bytes = Encoding.UTF8.GetBytes("hello world");
+
+file.BeginWrite(bytes, 0, bytes.Length, ar =>
+{
+    file.EndWrite(ar);
+    // Do it here
+    file.Close();
+}, null);
+----
+7,8 > The end is in the callback
+```
+
+---
+
+## Asynchronous Programming Model
+
+- `Begin`/`End` pair of methods
+- Consumes thread -> thread pool starvation
+- Alternative is to poll the result for `IsCompleted`
+- Doesn't compose well with other language constructs
+- Impossible to orchestrate
+- Read more at [Asynchronous Programming Model (APM)](https://docs.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/asynchronous-programming-model-apm)
+
+---
+
+```clike
+using (var file = File.Create("out.txt"))
+{
+    var bytes = Encoding.UTF8.GetBytes("hello world");
+
+    file.BeginWrite(bytes, 0, bytes.Length, ar =>
+    {
+        file.EndWrite(ar);
+    }, null);
+}
+----
+* > This doesn't work!
+```
+
+---
+
+```clike
+// write them in exact order!
+foreach (var fileName in fileNames)
+{
+    var bytes = Encoding.UTF8.GetBytes("hello world");
+
+    file.BeginWrite(bytes, 0, bytes.Length, ar =>
+    {
+        file.EndWrite(ar);
+    }, null);
+}
+----
+* > Also doesn't work!
+* > Where would you put try-catch here?
+```
+
+---
+
+# Moving on to the future! .NET Framework 2
+
+<small>2005</small>
+
+---
+
+```clike
+var client = new WebClient();
+
+client.DownloadStringAsync(new Uri("https://e-conomic.com"));
+client.DownloadStringCompleted += Client_DownloadStringCompleted;
+
+private void Client_DownloadStringCompleted(
+  object sender,
+  DownloadStringCompletedEventArgs e)
+{
+    var html = e.Result;
+}
+----
+* > Events!
+3 > Initiate the async call
+4 > Subscribe for the result with delegate
+10 > Get the result later on the calling thread
+* > But when do you remove the event?
+```
+
+---
+
+## Event-based Asynchronous Pattern
+
+- More modern
+- Doesn't consume threads
+- Allows multiple listeners
+- Returns on the original thread
+- Still doesn't compose
+- If the owner of waiting wants to be async, must implement similar interface
+- Read more at [Event-based Asynchronous Pattern (EAP)](https://docs.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/)
+
+---
+
+## Is there something better?
+
+- We want easy to use interface
+- Writing owners of async operation should also be easy to do
+- Cancellation should be easy to use
+- Progress reporting should be easy to do
+- Should compose well with C# constructs
+
+---
+
+# Task Parallel Library - functional programming to the rescue!
+
+<small>2010</small>
+
+---
+
+```clike
+var task = GetMeSomeTask();
+
+task.ContinueWith(t =>
+{
+  var result = t.Result;
+});
+----
+* > New async pattern
+1 > A hot task is acquired from somewhere
+3 > A continuation is scheduled to run once it is completed.
+```
+
+---
+
+```clike
+var client = new WebClient();
+
+var task = client.DownloadStringTaskAsync(...);
+task.ContinueWith(t =>
+{
+    var html = t.Result;
+});
+----
+* > Switching from EAP to TPL
+```
+
+---
+
+# Is this really better?
+
+<small>Spoiler: it is!</small>
+
+---
+
+```clike
+var client = new WebClient();
+
+Task<string> task = client.DownloadStringTaskAsync(...);
+Task<int> length = task.ContinueWith(t =>
+{
+    var html = t.Result;
+
+    return html.Length;
+});
+----
+* > Tasks are a consistent interface
+3 > This task returns some string
+4 > This task returns some integer
+```
+
+---
+
+```clike
+var client = new WebClient();
+
+var task = client.DownloadStringTaskAsync(...);
+return task
+  .ContinueWith(t =>
+  {
+      var html = t.Result;
+
+      return html.Length;
+  })
+  .ContinueWith(t =>
+  {
+    var length = t.Result;
+
+    // be creative here
+  });
+----
+* > It is easy to chain them
+5 > Continue when done
+11 > Continue again...
+* > And async "owner" becomes Task based as well
+```
+
+---
+
+```clike
+var promise = getData()
+  .then(onSuccess)
+  .catch(onFail);
+----
+* > Promises are tasks
+```
+
+---
+
+- to cancel throw `OperationCancelledException`
+- one can schedule to run on success, failure, cancellation or any combo
+- one can schedule to run on any thread or on the UI thread
+
+---
+
+## What is a `Task`?
+
+- a `Task` represents an ongoing operation (but it may already be when you get it)
+- continuations are used to subscribe to the result
+- subscribing after it is finished immediately invokes the continuation
+- same for cancelled/faulted tasks
+- IO bound and CPU bound operations
+
+---
+
+## Hmmm...
+
+- We still haven't solved all of the problems
+- Hard to compose with C# constructs
+- We are introducing `CancellationToken` - cooperative cancellation
+- For progress use `IProgress<T>` - manual work, but still...
+
+---
+
+# OK, let's do it manually!
+
+---
+
+```clike
+public class Downloader : IDisposable
+{
+    private HttpClient client;
+
+    public Downloader()
+    {
+        this.client = new HttpClient();
+    }
+
+    public void Dispose()
+    {
+        client.Dispose();
+    }
+
+    public Task<string> Fetcher(string subpath,
+               CancellationToken cancellationToken)
+    {
+        return client.GetStringAsync("baseUri" + subpath)
+            .ContinueWith(t =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return t.Result;
+            });
+    }
+}
+----
+* > Wrapper manages C# constructs
+1 > Must implement IDisposable because inner component uses it
+3 > Remember state...
+10,12 > ...so you can manually dispose it
+16 > Use cooperative cancellation...
+21 > ...but still manually check!
+```
+
+---
+
+```clike
+// Challenge! Convert to async
+
+public static void Copy(Stream a, Stream b)
+{
+    var bytes = new byte[32];
+    var offset = 0;
+    int count;
+
+    while ((count = a.Read(bytes, offset, 32)) > 0)
+    {
+        b.Write(bytes, offset, count);
+        offset += count;
+    }
+}
+----
+* > Simple sync code
+```
+
+---
+
+- we could rewrite it to async - but it's hard
+- lot's of variables, state
+- potential bugs
+- non-obvious
+- is anyone good at rewriting code?
+
+---
+
+```clike
+public Task DoAsync()
+{
+  // some code
+  int i = 0;
+  task
+    .ContinueWith(t =>
+    {
+      // some code that uses result...
+      i = 1;
+    })
+    .ContinueWith(t =>
+    {
+      // some code that uses second result...
+      i = -1;
+    });
+}
+----
+* > Hmmmm
+```
+
+---
+
+```clike
+public Task DoAsync()
+{
+  // some code
+  int i = 0;
+  var result1 <== task;
+
+  // some code that uses result...
+  i = 1;
+
+  var result2 <== task2;
+  // some code that uses second result...
+  i = -1;
+}
+----
+* > Assuming happy flow
+5,10 > Can we ... make this happen?
+5,10 > Can we ... wait for it?
+5,10 > ...asynchronously?
+```
+
+---
+
+```clike
+public async Task DoAsync()
+{
+  // some code
+  int i = 0;
+  var result1 = await task;
+
+  // some code that uses result...
+  i = 1;
+
+  var result2 = await task2;
+  // some code that uses second result...
+  i = -1;
+}
+----
+* > That was easy!
+5,10 > What exactly happens here? It's magic!
+```
+
+---
+
+- `async` function is a state machine, but better than hand-written one
+- it forces the method to return `void`, `Task` or `Task<T>`
+- and now it is composable with C#
+- cannot be used inside `unsafe`, `lock` and constructors
+
+---
+
+# Myth busting
+
+- Async != parallel
+- Async != threads
+- Async means not-sync
+
+---
+
+# What's next?
+
+- `ConfigureAwait(false)`
+- Exception handling
+- Combinators
+
+---
+
+> `await` saves current thread by default!
+
+- required by UI applications
+- wastes threads in ASP.NET workloads and in non-UI scenarios
+- `ConfigureAwait(false)` tells the app to _not_ remember the thread
+- not needed in ASP.NET Core
+- Read more [AspNetCoreDiagnosticScenarios](https://github.com/davidfowl/AspNetCoreDiagnosticScenarios/blob/master/AsyncGuidance.md)
+- use it always or never; if you aren't writing libraries, don't bother
+
+---
+
+```clike
+// I don't care about thread
+async Task Foo() => await Inner().ConfigureAwait(false);
+
+// I don't care, but forgot to tell that!
+async Task Inner() => await DeepCall();
+
+// library also doesn't care about thread
+async Task DeepCall() => await WeMustGoDeeper().ConfigureAwait(false);
+----
+* > Why all participants need to use it
+1,2 > At the beginning we don't care
+4,5 > But someone does!
+7,8 > Even if inner code is correct!
+```
+
+---
+
+# Exceptions are saved in Tasks
+
+- `void` root handlers should _always_ catch!
+- otherwise `TaskScheduler.UnobservedTaskException` will be invoked which won't crash your app since .NET 4.5 (but you can change it)
+- awaiting already faulted `Task` immediately throws the inner exception.
+
+---
+
+# CPU bound stuff
+
+- When dealing with heavy CPU operations use `Task.Run`
+- Better than background worker or threads for short-lived code
+- Freely mix fake tasks, IO bound tasks and CPU bound tasks
+- Read more [Task.Run vs Task.Factory.StartNew](https://devblogs.microsoft.com/pfxteam/task-run-vs-task-factory-startnew/)
+
+---
+
+```clike
+var result = await Task.Run(AnalyzeData);
+----
+* > Run heavy code...
+```
+
+---
+
+```clike
+var result = await Task.Run(async () =>
+{
+    await Task.Delay(0);
+    return 1;
+});
+
+var result = await Task.Factory.StartNew(async () =>
+{
+    await Task.Delay(0);
+    return 1;
+}).Unwrap();
+```
+
+---
+
+# DEMO fake task
+
+---
+
+## Combinators
+
+- `Task.WhenAll` and `Task.WhenAny`
+- latter is useful for timeout
+
+---
+
+```clike
+public static Task<T> WithTimeout<T>(this Task<T> task, int timeout)
+{
+    var t = Task.Delay(timeout);
+
+    var first = Task.WhenAny(task, t);
+
+    if (first == t)
+        throw new Exception();
+
+    return Task.FromResult(task.Result);
+}
+----
+* > Generic extension method on all tasks!
+5 > We wait for first one to finish
+8 > Not the best way...maybe cancel the other task?
+10 > Useful helper!
+```
+
+---
+
+# HACK HACK HACK
+
+- We can force `async` operation to finish synchronously by calling `.Result`, `.Wait()` or preferably `.GetAwaiter().GetResult()`.
+- But please don't! Only for legacy code where rewriting the entire stack is dangerous
+- In certain cases this might deadlock
+
+---
+
+# sync vs async
+
+|      | sync                 | async                |     |     |
+| ---- | -------------------- | -------------------- | --- | --- |
+| one  | T                    | Task&lt;T&gt;        |     |     |
+| many | IEnumerable&lt;T&gt; | IObservable&lt;T&gt; |     |     |
+
+- Rx = LINQ to events
+- if `Task` gives one result `IObservable` gives many
+
+---
+
+```clike
+private async void Button_Click_3(object sender, RoutedEventArgs e)
+{
+    var client = new HttpClient();
+    await client.GetStringAsync("https://secure.e-conomic.com");
+}
+----
+* > Motivating example - throttling async operations
+```
+
+---
+
+```clike
+Task throttle = null;
+CancellationTokenSource cts = new CancellationTokenSource();
+
+private void Button_Click_3(object sender, RoutedEventArgs e)
+{
+    if (throttle != null)
+    {
+        cts.Cancel();
+    };
+
+    cts = new CancellationTokenSource();
+
+    throttle = Task.Delay(500, cts.Token);
+    throttle.ContinueWith(
+      t => Download(),
+      TaskContinuationOptions.OnlyOnRanToCompletion);
+}
+
+async Task Download()
+{
+    var client = new HttpClient();
+    await client.GetStringAsync("https://secure.e-conomic.com");
+}
+----
+* > Complicated, but can be made as a higher order operation
+2 > We need to cancel previous request
+6,7,8,9 > Cancel if not first
+13 > Throttle by 500 ms
+14,15,16 > Only if throttle wasn't cancelled do the operation
+* > Use Rx if this is needed
+```
+
+---
+
+# IAsyncEnumerable
+
+- `for` and `await` are opaque -> they become `Task<TResult>`
+- but maybe the consumer _also_ want's to `for-await`
+
+---
+
+```clike
+Task<IEnumerable<T>> list;
+
+foreach (var element in await list)
+{
+  // only runs once everything is retrieved!
+}
+----
+* > How to do SelectAsync
+```
+
+---
+
+```clike
+static async Task Main(string[] args)
+{
+    await foreach (var html in Downloader(
+      "http://e-conomic.com",
+      "http://secure.e-conomic.com"))
+    {
+        Console.WriteLine($"HTML: {html.Substring(0, 10)}");
+    }
+}
+
+static async IAsyncEnumerable<string> Downloader(params string[] urls)
+{
+    foreach (var url in urls)
+    {
+        Console.WriteLine($"Fetching {url}");
+        yield return await new HttpClient().GetStringAsync(url);
+    }
+}
+----
+* > Truly async enumerables
+```
+
+---
+
+# The bad part
+
+- Only in C#8, .NET Standard 2.1 and .NET Core 3.0
+- Possible in ASP.NET but please don't!
+
+---
+
+# Onto the next part
+
+- UX issues
+
+---
+
+# Thanks! Q&A
